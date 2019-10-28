@@ -1,6 +1,7 @@
 from setuptools import setup, find_packages
+import os 
 
-with open('./VERSION') as f:
+with open(os.path.realpath('./VERSION')) as f:
     version = f.readline()
 
 setup(
