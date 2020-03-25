@@ -62,7 +62,7 @@ class ObjectFactory:
         f = ObjectFactory(class_object, *args, **kwargs)
 
     Special Keyword Arguments:
-        _group  : For object grouping, retrieve using DependencyGroup during provider registration
+        _group  : For object grouping, retrieve using DependencyGroup during container registration
         _alias  : For object aliasing
         _config : To set object as config, will be pass to DependencyConfig
 
@@ -75,9 +75,9 @@ class ObjectFactory:
 
     *args, **kwargs will be merge with dependency_args and dependency_kwargs is passed during class object creation
     """
-    def __init__(self, class_object, providers, *args, **kwargs):
+    def __init__(self, class_object, containers, *args, **kwargs):
         self.__class_object = class_object
-        self.__providers = providers
+        self.__containers = containers
         self.__dependency_args = args
         self.__dependency_kwargs = kwargs
         self.__instance = None
@@ -87,14 +87,14 @@ class ObjectFactory:
     def name(self):
         return self.__class_object.__qualname__
 
-    def update_providers(self, providers):
-        self.__providers = providers
+    def update_containers(self, containers):
+        self.__containers = containers
 
     def __create_instance(self, *args, **kwargs):
 
-        dependency_args = [arg.build(self.__providers)
+        dependency_args = [arg.build(self.__containers)
                            for arg in self.__dependency_args]
-        dependency_kwargs = dict((k, v.build(self.__providers))
+        dependency_kwargs = dict((k, v.build(self.__containers))
                                  for k, v in self.__dependency_kwargs.items())
 
         dependency_args = tuple(dependency_args) + tuple(args)
@@ -137,7 +137,7 @@ class Dependency:
         self.__dependency_kwargs = kwargs
         self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
 
-    def build(self, providers):
+    def build(self, containers):
         obj = None
 
         if inspect.isclass(self.__class):
@@ -147,7 +147,7 @@ class Dependency:
                     if isinstance(obj, ObjectFactoryMap):
                         obj = getattr(obj, path)
                     else:
-                        obj = getattr(providers, path)
+                        obj = getattr(containers, path)
 
                 # Unregister dependency return normal class ( always new instance )
                 if obj is None:
@@ -174,7 +174,7 @@ class DependencyPath:
         self.__dependency_kwargs = kwargs
         self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
 
-    def build(self, providers):
+    def build(self, containers):
         obj = None
 
         try:
@@ -185,7 +185,7 @@ class DependencyPath:
                 if isinstance(obj, ObjectFactoryMap):
                     obj = getattr(obj, path)
                 else:
-                    obj = getattr(providers, path)
+                    obj = getattr(containers, path)
 
             # Unregister dependency return normal class ( always new instance )
             if obj is None:
@@ -220,9 +220,9 @@ class DependencyConfig:
         self.__format = format
         self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
 
-    def build(self, providers):
+    def build(self, containers):
         try:
-            config_instance = providers["_config"].instance()
+            config_instance = containers["_config"].instance()
         except:
             raise Exception("Object for config not set, please register object with _config=True")
 
@@ -231,6 +231,20 @@ class DependencyConfig:
             raise Exception("Config must implement : def get(config_path, placeholder, format)")
 
         return config_instance.get(self.__config_path, placeholder=self.__placeholder, format=self.__format)
+
+class DependencyCallback:
+    def __init__(self, callback, *args, **kwargs):
+        self.__callback = callback
+        self.__dependency_args = args
+        self.__dependency_kwargs = kwargs
+        self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
+
+    def build(self, containers):
+        try:
+            # obj = self.__callback(containers, *self.__dependency_args, **self.__dependency_kwargs)
+            return self.__callback(containers, *self.__dependency_args, **self.__dependency_kwargs)
+        except:
+            raise Exception("Unsupported object type")
 
 class DependencyGroup:
     """
@@ -246,13 +260,13 @@ class DependencyGroup:
         self.__dependency_kwargs = kwargs
         self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
 
-    def build(self, providers):
+    def build(self, containers):
         objs = []
 
-        if  self.__group_name not in providers["_group"]:
+        if  self.__group_name not in containers["_group"]:
             return objs
 
-        for obj in providers["_group"][self.__group_name]:
+        for obj in containers["_group"][self.__group_name]:
             try:
                 if self.__single_instance is False:
                     objs.append(obj.build(*self.__dependency_args,
@@ -267,19 +281,19 @@ class DependencyGroup:
 
 class Container:
     """
-    Container of all providers, should be called only once in application
+    Container of all object, should be called only once in application
     Might not thread safe
     """
     def __init__(self):
-        self.__providers = ObjectFactoryMap(
+        self.__container = ObjectFactoryMap(
             {"_group": ObjectFactoryMap(), "_alias": ObjectFactoryMap(), "_config": None})
 
     def __getattr__(self, key):
         try:
-            return self.__providers.get(key)
+            return self.__container.get(key)
         except:
             try:
-                return self.__providers._alias.get(key)
+                return self.__container._alias.get(key)
             except:
                 pass
             raise Exception("Dependency {} is not register".format(key))
@@ -288,16 +302,16 @@ class Container:
         if not isinstance(container, Container):
             raise Exception("Can only update form Container instance")
 
-        self._update_providers(self.__providers, container.list())
+        self._update_containers(self.__container, container.list())
 
         for obj in self.list_object_factories():
-            obj.update_providers(self.__providers)
+            obj.update_containers(self.__container)
 
-    def _update_providers(self, dict1, dict2):
+    def _update_containers(self, dict1, dict2):
         for key, val in dict2.items():
             if key in dict1:
                 if isinstance(dict1[key], ObjectFactoryMap):
-                    self._update_providers(dict1[key], val)
+                    self._update_containers(dict1[key], val)
                 elif isinstance(dict1[key], ObjectFactory):
                     if val is not None:
                         dict1[key] = val
@@ -311,7 +325,7 @@ class Container:
     def list_object_factories(self, objects=None):
         objs = []
 
-        objects = objects or self.__providers
+        objects = objects or self.__container
 
         for k, v in objects.items():
             if isinstance(v, dict):
@@ -324,12 +338,12 @@ class Container:
         return objs
 
     def list(self):
-        return self.__providers
+        return self.__container
 
     def register(self, class_object, *args, **kwargs):
         # Change class_object to Dependency object by default
         args = [(Dependency(arg) if not isinstance(
-            arg, (Dependency, DependencyPath, DependencyGroup, DependencyConfig)) else arg) for arg in args]
+            arg, (Dependency, DependencyPath, DependencyGroup, DependencyConfig, DependencyCallback)) else arg) for arg in args]
 
         object_group = kwargs.pop("_group", None)
         object_alias = kwargs.pop("_alias", None)
@@ -338,13 +352,13 @@ class Container:
         kwargs = dict((k, Dependency(v) if not isinstance(
             v, (Dependency, DependencyPath, DependencyGroup, DependencyConfig)) else v) for k, v in kwargs.items())
 
-        obj = ObjectFactory(class_object, self.__providers, *args, **kwargs)
+        obj = ObjectFactory(class_object, self.__container, *args, **kwargs)
         self.__group_factory(obj, object_group)
         self.__add_alias(obj, object_alias)
         self.__set_config(obj, object_config)
 
         paths = _retrieve_class_path(class_object)
-        current_level = self.__providers
+        current_level = self.__container
 
         for i, path in enumerate(paths):
             if (i == len(paths) - 1):
@@ -356,19 +370,19 @@ class Container:
 
     def __set_config(self, obj, as_config=True):
         if as_config:
-            self.__providers["_config"] = obj
+            self.__container["_config"] = obj
 
     def __add_alias(self, obj, alias_name=None):
         if alias_name is None:
             return False
 
-        self.__providers._alias[alias_name] = obj
+        self.__container._alias[alias_name] = obj
 
     def __group_factory(self, obj, group_name=None):
         if group_name is None:
             return False
 
-        if group_name not in self.__providers._group:
-            self.__providers._group[group_name] = []
+        if group_name not in self.__container._group:
+            self.__container._group[group_name] = []
 
-        self.__providers._group[group_name].append(obj)
+        self.__container._group[group_name].append(obj)
