@@ -53,7 +53,6 @@ class ObjectFactoryMap(dict):
             super(ObjectFactoryMap, self).__delitem__(key)
             del self.__dict__[key]
 
-
 class ObjectFactory:
     """
     ObjectFactory
@@ -178,8 +177,7 @@ class DependencyPath:
         obj = None
 
         try:
-            class_paths = obj.__module__.split(".")
-            class_paths.append(obj.__qualname__)
+            class_path = self.__path.split(".")
 
             for path in class_path:
                 if isinstance(obj, ObjectFactoryMap):
@@ -214,10 +212,10 @@ class DependencyConfig:
         placeholder : default value when config is not found
         value_format : Config value return format in str, bool, int, float default to str
     """
-    def __init__(self, config_path, placeholder=None, format=str):
+    def __init__(self, config_path, placeholder=None, value_format=str):
         self.__config_path = config_path
         self.__placeholder = placeholder
-        self.__format = format
+        self.__value_format = value_format
         self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
 
     def build(self, containers):
@@ -228,21 +226,53 @@ class DependencyConfig:
 
         get_function = getattr(config_instance, "get", None)
         if not callable(get_function):
-            raise Exception("Config must implement : def get(config_path, placeholder, format)")
+            raise Exception("Config must implement : def get(config_path, placeholder, value_format)")
 
-        return config_instance.get(self.__config_path, placeholder=self.__placeholder, format=self.__format)
+        return config_instance.get(self.__config_path, placeholder=self.__placeholder, value_format=self.__value_format)
 
 class DependencyCallback:
-    def __init__(self, callback, *args, **kwargs):
+    """
+    Dependency Callback
+
+    Run defined callback function
+        callback(containers, *args, **kwargs)
+
+    Arguments:
+        callback : callable function
+        _single_instance : return new instance if False
+        args: callback function arguments
+        kwargs: callback function keyword arguments
+    """
+    def __init__(self, callback, _single_instance=True, *args, **kwargs):
         self.__callback = callback
+        self.__single_instance = _single_instance
         self.__dependency_args = args
         self.__dependency_kwargs = kwargs
         self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
 
     def build(self, containers):
         try:
-            # obj = self.__callback(containers, *self.__dependency_args, **self.__dependency_kwargs)
-            return self.__callback(containers, *self.__dependency_args, **self.__dependency_kwargs)
+            result =  self.__callback(containers, *self.__dependency_args, **self.__dependency_kwargs)
+
+            if not inspect.isclass(result):
+                return result
+
+            class_path = _retrieve_class_path(result)
+            obj = None
+
+            for path in class_path:
+                if isinstance(obj, ObjectFactoryMap):
+                    obj = getattr(obj, path)
+                else:
+                    obj = getattr(containers, path)
+
+            # Unregister dependency return normal class ( always new instance )
+            if obj is None:
+                return result(*self.__dependency_args, **self.__dependency_kwargs)
+
+            if self.__single_instance is False:
+                return obj.build(*self.__dependency_args, **self.__dependency_kwargs)
+            return obj.instance(*self.__dependency_args, **self.__dependency_kwargs)
         except:
             raise Exception("Unsupported object type")
 
