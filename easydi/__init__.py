@@ -283,15 +283,19 @@ class DependencyGroup:
     Return list of ObjectFactory instance
     """
 
-    def __init__(self, group_name, _single_instance=True, *args, **kwargs):
+    def __init__(self, group_name, as_dict=False, _single_instance=True, *args, **kwargs):
         self.__group_name = group_name
         self.__single_instance = _single_instance
         self.__dependency_args = args
         self.__dependency_kwargs = kwargs
+        self.__as_dict = as_dict
         self._logger = logging.getLogger("easydi.{}".format(self.__class__.__name__))
 
     def build(self, containers):
-        objs = []
+        if self.__as_dict:
+            objs = {}
+        else:
+            objs = []
 
         if  self.__group_name not in containers["_group"]:
             return objs
@@ -299,11 +303,16 @@ class DependencyGroup:
         for obj in containers["_group"][self.__group_name]:
             try:
                 if self.__single_instance is False:
-                    objs.append(obj.build(*self.__dependency_args,
-                                          **self.__dependency_kwargs))
+                    instance = obj.build(*self.__dependency_args,
+                                          **self.__dependency_kwargs)
                 else:
-                    objs.append(obj.instance(*self.__dependency_args,
-                                         **self.__dependency_kwargs))
+                    instance = obj.instance(*self.__dependency_args,
+                                         **self.__dependency_kwargs)
+
+                if self.__as_dict:
+                    objs[obj.name] = instance
+                else:
+                    objs.append(instance)
             except:
                 self._logger.debug(sys.exc_info())
 
@@ -375,7 +384,7 @@ class Container:
         args = [(Dependency(arg) if not isinstance(
             arg, (Dependency, DependencyPath, DependencyGroup, DependencyConfig, DependencyCallback)) else arg) for arg in args]
 
-        object_group = kwargs.pop("_group", None)
+        object_group = kwargs.pop("_group", [])
         object_alias = kwargs.pop("_alias", None)
         object_config = kwargs.pop("_config", False)
 
@@ -409,10 +418,14 @@ class Container:
         self.__container._alias[alias_name] = obj
 
     def __group_factory(self, obj, group_name=None):
-        if group_name is None:
+        if group_name is None or not len(group_name):
             return False
 
-        if group_name not in self.__container._group:
-            self.__container._group[group_name] = []
+        if isinstance(group_name, str):
+            group_name = [group_name]
 
-        self.__container._group[group_name].append(obj)
+        for name in group_name:
+            if name not in self.__container._group:
+                self.__container._group[name] = []
+
+            self.__container._group[name].append(obj)
